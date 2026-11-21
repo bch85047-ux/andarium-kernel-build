@@ -24,23 +24,17 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang lld llvm \
-            bc kmod cpio flex bison libssl-dev \
-            libelf-dev dwarves pahole git wget \
-            erofs-utils e2fsprogs sgdisk \
-            qemu-user-static binfmt-support \
-            zstd pigz python3
+          sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison \
+            libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs sgdisk \
+            qemu-user-static binfmt-support zstd pigz python3
 
-      - name: Enable binfmt_misc for ARM64
-        run: |
-          sudo update-binfmts --enable qemu-aarch64 || true
+      - name: Enable binfmt_misc
+        run: sudo update-binfmts --enable qemu-aarch64 || true
 
       - name: Clone Linux kernel source
         run: |
@@ -53,17 +47,14 @@ jobs:
           cd linux-6.18
           if ls "${{ github.workspace }}/patches"/*.patch >/dev/null 2>&1; then
             for p in "${{ github.workspace }}/patches"/*.patch; do
-              git apply "$p" 2>/dev/null || echo "Skipped: $p"
+              git apply "$p" 2>/dev/null || echo "Skip: $p"
             done
-          else
-            echo "No patches found"
           fi
 
       - name: Generate optimized kernel config
         run: |
           cd linux-6.18
           cat > arch/um/configs/andarium_opt_defconfig << 'EOF'
-# Andarium 优化内核配置 (Linux 6.18 UML ARM64)
 CONFIG_PREEMPT_VOLUNTARY=y
 CONFIG_HZ=250
 CONFIG_NO_HZ_FULL=y
@@ -103,15 +94,13 @@ EOF
           ls -lh linux
           file linux
 
-      - name: Upload kernel artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: uml-kernel-optimized
           path: linux-6.18/linux
           retention-days: 30
 
-      - name: Upload build log
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: linux-6.18/build.log
@@ -123,40 +112,29 @@ EOF
     timeout-minutes: 90
     if: ${{ inputs.compress_system_img }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install erofs tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y erofs-utils e2fsprogs sgdisk python3 zstd
+        run: sudo apt-get update && sudo apt-get install -y erofs-utils e2fsprogs sgdisk python3 zstd
 
-      - name: Download system.img from Release
+      - name: Download system.img chunks from Release
         run: |
-          # 优先下载完整 system.img，失败则用分块
-          URL="https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img/system.img"
-          if wget -q --show-progress -O system.img "$URL"; then
-            echo "✅ 完整 system.img 下载成功"
-          else
-            echo "⚠️ 完整下载失败，尝试分块"
-            mkdir -p chunks
-            for suffix in aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as at au; do
-              wget -q --show-progress -O "chunks/system.img.$suffix" \
-                "https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img/system.img.$suffix"
-            done
-            cat chunks/system.img.* > system.img
-          fi
+          mkdir -p chunks
+          BASE="https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img"
+          for suffix in aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as at au; do
+            wget -q --show-progress -O "chunks/system.img.$suffix" "$BASE/system.img.$suffix"
+          done
+          cat chunks/system.img.* > system.img
           ls -lh system.img
           stat -c%s system.img
+          test "$(stat -c%s system.img)" = "1056526336" && echo "SIZE OK" || echo "SIZE MISMATCH"
 
       - name: Compress system.img partitions
         run: |
           python3 scripts/compress_system_img.py system.img system.img.compressed
-          ls -lh system.img system.img.compressed
           sgdisk -p system.img.compressed
 
-      - name: Upload compressed system.img
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: system-img-compressed
           path: system.img.compressed
@@ -169,43 +147,38 @@ EOF
     needs: [build-kernel, compress-system-img]
     if: ${{ inputs.build_ipa }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y python3
 
-      - name: Download kernel artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: uml-kernel-optimized
           path: kernel-out
 
-      - name: Download compressed system.img
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: system-img-compressed
           path: img-out
 
-      - name: Download original IPA from Release
+      - name: Download original IPA chunks from Release
         run: |
-          URL="https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img/Andarium-1.0-15.ipa"
-          wget -q --show-progress -O Andarium-1.0-15.ipa "$URL" || \
-            echo "IPA 未上传，跳过重打包步骤"
-          ls -lh *.ipa 2>/dev/null || echo "No IPA available"
+          mkdir -p ipachunks
+          BASE="https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img"
+          for suffix in aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as at au av; do
+            wget -q --show-progress -O "ipachunks/ipa.$suffix" "$BASE/Andarium-1.0-15.ipa.$suffix"
+          done
+          cat ipachunks/ipa.* > Andarium-1.0-15.ipa
+          ls -lh Andarium-1.0-15.ipa
+          unzip -l Andarium-1.0-15.ipa | tail -3
 
       - name: Repack IPA
-        if: hashFiles('Andarium-1.0-15.ipa') != ''
         run: |
-          python3 scripts/repack_ipa.py \
-            Andarium-1.0-15.ipa \
-            Andarium-optimized.ipa \
-            kernel-command-line-optimized.txt \
-            img-out/system.img.compressed
+          python3 scripts/repack_ipa.py Andarium-1.0-15.ipa Andarium-optimized.ipa \
+            kernel-command-line-optimized.txt img-out/system.img.compressed
 
-      - name: Upload final IPA
-        if: hashFiles('Andarium-optimized.ipa') != ''
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: andarium-optimized-ipa
           path: Andarium-optimized.ipa
