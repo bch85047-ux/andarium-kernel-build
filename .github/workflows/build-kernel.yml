@@ -29,9 +29,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison \
-            libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs sgdisk \
-            qemu-user-static binfmt-support zstd pigz python3
+          sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs sgdisk qemu-user-static binfmt-support zstd pigz python3
 
       - name: Enable binfmt_misc
         run: sudo update-binfmts --enable qemu-aarch64 || true
@@ -54,37 +52,37 @@ jobs:
       - name: Generate optimized kernel config
         run: |
           cd linux-6.18
-          cat > arch/um/configs/andarium_opt_defconfig << 'EOF'
-CONFIG_PREEMPT_VOLUNTARY=y
-CONFIG_HZ=250
-CONFIG_NO_HZ_FULL=y
-CONFIG_NO_HZ=y
-CONFIG_HIGH_RES_TIMERS=y
-CONFIG_EROFS_FS=y
-CONFIG_EROFS_FS_COMPRESSION=y
-CONFIG_EROFS_FS_LZ4HC=y
-CONFIG_EROFS_FS_ZSTD=y
-CONFIG_AUDIT=n
-CONFIG_LOCKUP_DETECTOR=n
-CONFIG_DEBUG_KERNEL=n
-CONFIG_MODULES=n
-CONFIG_TRANSPARENT_HUGEPAGE=y
-CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y
-CONFIG_RPS=y
-CONFIG_RFS_ACCEL=y
-CONFIG_XPS=y
-CONFIG_VIRTIO=y
-CONFIG_VIRTIO_UML=y
-CONFIG_VIRTIO_BLK=y
-CONFIG_VIRTIO_NET=y
-CONFIG_VIRTIO_GPU=y
-CONFIG_ANDROID_BINDER_IPC=y
-CONFIG_ANDROID_BINDERFS=y
-CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"
-CONFIG_ANDROID_ASHMEM=y
-CONFIG_ION=y
-CONFIG_ANDROID_LOGGER=y
-EOF
+          printf '%s\n' \
+            'CONFIG_PREEMPT_VOLUNTARY=y' \
+            'CONFIG_HZ=250' \
+            'CONFIG_NO_HZ_FULL=y' \
+            'CONFIG_NO_HZ=y' \
+            'CONFIG_HIGH_RES_TIMERS=y' \
+            'CONFIG_EROFS_FS=y' \
+            'CONFIG_EROFS_FS_COMPRESSION=y' \
+            'CONFIG_EROFS_FS_LZ4HC=y' \
+            'CONFIG_EROFS_FS_ZSTD=y' \
+            'CONFIG_AUDIT=n' \
+            'CONFIG_LOCKUP_DETECTOR=n' \
+            'CONFIG_DEBUG_KERNEL=n' \
+            'CONFIG_MODULES=n' \
+            'CONFIG_TRANSPARENT_HUGEPAGE=y' \
+            'CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y' \
+            'CONFIG_RPS=y' \
+            'CONFIG_RFS_ACCEL=y' \
+            'CONFIG_XPS=y' \
+            'CONFIG_VIRTIO=y' \
+            'CONFIG_VIRTIO_UML=y' \
+            'CONFIG_VIRTIO_BLK=y' \
+            'CONFIG_VIRTIO_NET=y' \
+            'CONFIG_VIRTIO_GPU=y' \
+            'CONFIG_ANDROID_BINDER_IPC=y' \
+            'CONFIG_ANDROID_BINDERFS=y' \
+            'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' \
+            'CONFIG_ANDROID_ASHMEM=y' \
+            'CONFIG_ION=y' \
+            'CONFIG_ANDROID_LOGGER=y' \
+            > arch/um/configs/andarium_opt_defconfig
 
       - name: Build UML kernel
         run: |
@@ -175,8 +173,7 @@ EOF
 
       - name: Repack IPA
         run: |
-          python3 scripts/repack_ipa.py Andarium-1.0-15.ipa Andarium-optimized.ipa \
-            kernel-command-line-optimized.txt img-out/system.img.compressed
+          python3 scripts/repack_ipa.py Andarium-1.0-15.ipa Andarium-optimized.ipa kernel-command-line-optimized.txt img-out/system.img.compressed
 
       - uses: actions/upload-artifact@v4
         with:
