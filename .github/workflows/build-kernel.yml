@@ -1,0 +1,202 @@
+name: Andarium Kernel Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: 'Kernel config variant'
+        required: true
+        default: 'andarium_opt'
+        type: choice
+        options:
+          - andarium_opt
+          - andarium_opt_noaudit
+      compress_system_img:
+        description: 'Compress system.img with erofs lz4hc'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build-kernel:
+    name: Build UML Kernel (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      KERNEL_VERSION: "6.18"
+      MAKEFLAGS: "-j$(nproc)"
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang lld llvm \
+            bc kmod cpio flex bison libssl-dev \
+            libelf-dev dwarves pahole git wget \
+            erofs-utils e2fsprogs sgdisk \
+            qemu-user-static binfmt-support \
+            zstd pigz python3
+      
+      - name: Enable binfmt_misc for ARM64
+        run: |
+          sudo update-binfmts --enable qemu-aarch64 || true
+      
+      - name: Clone Linux kernel source
+        run: |
+          git clone --depth=1 -b linux-6.18.y https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git linux-6.18
+          cd linux-6.18
+          echo "Kernel source cloned: $(git log -1 --oneline)"
+      
+      - name: Apply Andarium patches
+        run: |
+          cd linux-6.18
+          if [ -d "${{ github.workspace }}/patches" ]; then
+            for p in "${{ github.workspace }}/patches"/*.patch; do
+              git apply "$p" 2>/dev/null || echo "Skipped: $p"
+            done
+          else
+            echo "No patches directory found, skipping..."
+          fi
+      
+      - name: Generate optimized kernel config
+        run: |
+          cd linux-6.18
+          cat > arch/um/configs/andarium_opt_defconfig << 'EOF'
+# Andarium 优化内核配置 (基于 Linux 6.18 UML ARM64)
+CONFIG_PREEMPT_VOLUNTARY=y
+CONFIG_HZ=250
+CONFIG_NO_HZ_FULL=y
+CONFIG_NO_HZ=y
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_EROFS_FS=y
+CONFIG_EROFS_FS_COMPRESSION=y
+CONFIG_EROFS_FS_LZ4HC=y
+CONFIG_EROFS_FS_ZSTD=y
+CONFIG_AUDIT=n
+CONFIG_LOCKUP_DETECTOR=n
+CONFIG_DEBUG_KERNEL=n
+CONFIG_MODULES=n
+CONFIG_TRANSPARENT_HUGEPAGE=y
+CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y
+CONFIG_RPS=y
+CONFIG_RFS_ACCEL=y
+CONFIG_XPS=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_UML=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_GPU=y
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"
+CONFIG_ANDROID_ASHMEM=y
+CONFIG_ION=y
+CONFIG_ANDROID_LOGGER=y
+EOF
+      
+      - name: Build UML kernel
+        run: |
+          cd linux-6.18
+          make ARCH=um andarium_opt_defconfig
+          make ARCH=um -j$(nproc) CC=clang LLVM=1 2>&1 | tee build.log
+          ls -lh linux
+          file linux
+      
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uml-kernel-optimized
+          path: linux-6.18/linux
+          retention-days: 30
+      
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: linux-6.18/build.log
+          retention-days: 30
+
+  compress-system-img:
+    name: Compress system.img (erofs lz4hc)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    needs: build-kernel
+    if: ${{ inputs.compress_system_img }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install erofs tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y erofs-utils e2fsprogs sgdisk python3 zstd
+      
+      - name: Download original system.img
+        run: |
+          # 需要用户上传 system.img 到 release 或外部存储
+          echo "请将原版 system.img 放到仓库或从 Release 下载"
+          # 示例：从 Release 下载
+          # gh release download v1.0 -p system.img -R user/repo
+      
+      - name: Compress system.img partitions
+        if: ${{ hashFiles('system.img') != '' }}
+        run: |
+          python3 scripts/compress_system_img.py system.img system.img.compressed
+          ls -lh system.img system.img.compressed
+      
+      - name: Upload compressed system.img
+        if: ${{ hashFiles('system.img.compressed') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-img-compressed
+          path: system.img.compressed
+          retention-days: 30
+
+  repack-ipa:
+    name: Repack Andarium IPA
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    needs: [build-kernel, compress-system-img]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uml-kernel-optimized
+          path: kernel-out
+      
+      - name: Download compressed system.img
+        uses: actions/download-artifact@v4
+        with:
+          name: system-img-compressed
+          path: img-out
+      
+      - name: Install Python dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3
+      
+      - name: Repack IPA with optimized kernel + compressed system.img
+        run: |
+          python3 scripts/repack_ipa.py \
+            Andarium-1.0-15.ipa \
+            Andarium-optimized.ipa \
+            kernel-command-line-optimized.txt \
+            img-out/system.img.compressed
+      
+      - name: Upload final IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: andarium-optimized-ipa
+          path: Andarium-optimized.ipa
+          retention-days: 30
