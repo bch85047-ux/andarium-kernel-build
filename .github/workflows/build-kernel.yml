@@ -29,7 +29,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs sgdisk qemu-user-static binfmt-support zstd pigz python3
+          sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs gdisk qemu-user-static binfmt-support zstd pigz python3
 
       - name: Enable binfmt_misc
         run: sudo update-binfmts --enable qemu-aarch64 || true
@@ -113,7 +113,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install erofs tools
-        run: sudo apt-get update && sudo apt-get install -y erofs-utils e2fsprogs sgdisk python3 zstd
+        run: sudo apt-get update && sudo apt-get install -y erofs-utils e2fsprogs gdisk python3 zstd
 
       - name: Download system.img chunks from Release
         run: |
