@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
 Andarium system.img erofs 压缩脚本
-将 system 和 vendor 分区用 lz4hc 压缩，保持分区边界与 GPT 完全一致
+将 system 和 vendor 分区用 lz4/lz4hc/deflate 压缩，保持分区边界与 GPT 完全一致
+用法: python3 compress_system_img.py <输入> <输出> [算法] [只压缩system/vendor]
+算法: lz4 | lz4hc | deflate (默认 lz4，兼容性最好)
 """
-import os, sys, hashlib, subprocess, tempfile, shutil
+import os, sys, subprocess, tempfile
+
+ALGO = sys.argv[3] if len(sys.argv) > 3 else 'lz4'
 
 def run_cmd(cmd, check=True):
-    print(f"$ {' '.join(cmd)}")
+    print(f"$ {' '.join(cmd)}", flush=True)
     return subprocess.run(cmd, check=check, capture_output=True, text=True)
 
-def compress_partition(input_img, partition_name, start_byte, size, output_dir, algo='lz4hc'):
+def compress_partition(input_img, partition_name, start_byte, size, output_dir, algo='lz4'):
     """提取分区 -> 解压 erofs -> 重建压缩 erofs -> 返回压缩数据"""
     part_file = os.path.join(output_dir, f"{partition_name}.img")
     extract_dir = os.path.join(output_dir, f"{partition_name}_extracted")
@@ -22,15 +26,29 @@ def compress_partition(input_img, partition_name, start_byte, size, output_dir, 
     with open(part_file, 'wb') as f:
         f.write(data)
     
-    # 2. 解压 erofs
+    # 2. 解压 erofs (多语法兼容)
     os.makedirs(extract_dir, exist_ok=True)
-    run_cmd(['fsck.erofs', f'--extract={extract_dir}', part_file])
+    extracted = False
+    for cmd in (['fsck.erofs', f'--extract={extract_dir}', part_file],
+                ['fsck.erofs', '--extract', extract_dir, part_file],
+                ['fsck.erofs', '-x', extract_dir, part_file],
+                ['dump.erofs', '--extract', extract_dir, part_file]):
+        try:
+            run_cmd(cmd)
+            extracted = True
+            break
+        except Exception as e:
+            print(f"  尝试 {cmd[0]} {' '.join(cmd[1:])} 失败: {str(e)[:80]}")
+    if not extracted:
+        raise RuntimeError(f"无法解压 {partition_name} erofs")
     
     # 3. 重建压缩 erofs
-    if algo == 'lz4hc':
+    if algo == 'lz4':
+        run_cmd(['mkfs.erofs', '-b', '4096', '-z', 'lz4', compressed_file, extract_dir])
+    elif algo == 'lz4hc':
         run_cmd(['mkfs.erofs', '-b', '4096', '-z', 'lz4hc', compressed_file, extract_dir])
-    elif algo == 'zstd':
-        run_cmd(['mkfs.erofs', '-b', '4096', '-z', 'zstd:3', compressed_file, extract_dir])
+    elif algo == 'deflate':
+        run_cmd(['mkfs.erofs', '-b', '4096', '-z', 'deflate', compressed_file, extract_dir])
     
     # 4. 读取压缩数据
     with open(compressed_file, 'rb') as f:
@@ -71,7 +89,7 @@ def main():
         
         for name, start, size, compress in partitions:
             if compress:
-                compressed_parts[name] = compress_partition(input_img, name, start, size, tmpdir)
+                compressed_parts[name] = compress_partition(input_img, name, start, size, tmpdir, ALGO)
             else:
                 compressed_parts[name] = None
         
