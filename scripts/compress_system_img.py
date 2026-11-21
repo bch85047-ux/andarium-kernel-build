@@ -59,8 +59,8 @@ def compress_partition(input_img, partition_name, start_byte, size, output_dir, 
     return compressed_data
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"用法: {sys.argv[0]} <输入system.img> <输出system.img>")
+    if len(sys.argv) < 3:
+        print(f"用法: {sys.argv[0]} <输入system.img> <输出system.img> [算法:lz4|lz4hc|deflate]")
         sys.exit(1)
     
     input_img = sys.argv[1]
