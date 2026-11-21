@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       compress_system_img:
-        description: 'Compress system.img with erofs lz4hc'
+        description: 'Compress system.img with erofs lz4'
         required: true
         default: true
         type: boolean
@@ -20,9 +20,10 @@ permissions:
 
 jobs:
   build-kernel:
-    name: Build UML Kernel (ARM64)
-    runs-on: ubuntu-24.04-arm
+    name: Build UML Kernel (x86_64, fallback)
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -31,64 +32,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang lld llvm bc kmod cpio flex bison libssl-dev libelf-dev dwarves pahole git wget erofs-utils e2fsprogs gdisk qemu-user-static binfmt-support zstd pigz python3
 
-      - name: Enable binfmt_misc
-        run: sudo update-binfmts --enable qemu-aarch64 || true
-
-      - name: Clone Linux kernel source
+      - name: Clone Linux kernel source (mainline)
         run: |
-          git clone --depth=1 -b linux-6.18.y https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git linux-6.18
-          cd linux-6.18
-          echo "Kernel: $(git log -1 --oneline)"
+          git clone --depth=1 -b v6.18 https://github.com/torvalds/linux.git linux-6.18
+          cd linux-6.18 && echo "Kernel: $(git log -1 --oneline)"
 
-      - name: Apply Andarium patches
+      - name: Generate optimized kernel config (UML x86_64)
         run: |
           cd linux-6.18
-          if ls "${{ github.workspace }}/patches"/*.patch >/dev/null 2>&1; then
-            for p in "${{ github.workspace }}/patches"/*.patch; do
-              git apply "$p" 2>/dev/null || echo "Skip: $p"
-            done
-          fi
-
-      - name: Generate optimized kernel config
-        run: |
-          cd linux-6.18
-          printf '%s\n' \
-            'CONFIG_PREEMPT_VOLUNTARY=y' \
-            'CONFIG_HZ=250' \
-            'CONFIG_NO_HZ_FULL=y' \
-            'CONFIG_NO_HZ=y' \
-            'CONFIG_HIGH_RES_TIMERS=y' \
-            'CONFIG_EROFS_FS=y' \
-            'CONFIG_EROFS_FS_COMPRESSION=y' \
-            'CONFIG_EROFS_FS_LZ4HC=y' \
-            'CONFIG_EROFS_FS_ZSTD=y' \
-            'CONFIG_AUDIT=n' \
-            'CONFIG_LOCKUP_DETECTOR=n' \
-            'CONFIG_DEBUG_KERNEL=n' \
-            'CONFIG_MODULES=n' \
-            'CONFIG_TRANSPARENT_HUGEPAGE=y' \
-            'CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y' \
-            'CONFIG_RPS=y' \
-            'CONFIG_RFS_ACCEL=y' \
-            'CONFIG_XPS=y' \
-            'CONFIG_VIRTIO=y' \
-            'CONFIG_VIRTIO_UML=y' \
-            'CONFIG_VIRTIO_BLK=y' \
-            'CONFIG_VIRTIO_NET=y' \
-            'CONFIG_VIRTIO_GPU=y' \
-            'CONFIG_ANDROID_BINDER_IPC=y' \
-            'CONFIG_ANDROID_BINDERFS=y' \
-            'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' \
-            'CONFIG_ANDROID_ASHMEM=y' \
-            'CONFIG_ION=y' \
-            'CONFIG_ANDROID_LOGGER=y' \
-            > arch/um/configs/andarium_opt_defconfig
+          make ARCH=um defconfig
+          ./scripts/config --enable PREEMPT_VOLUNTARY
+          ./scripts/config --set-str CONFIG_HZ 250
+          ./scripts/config --enable NO_HZ_FULL
+          ./scripts/config --enable EROFS_FS
+          ./scripts/config --enable EROFS_FS_COMPRESSION
+          ./scripts/config --enable EROFS_FS_LZ4
+          ./scripts/config --enable EROFS_FS_LZ4HC
+          ./scripts/config --disable DEBUG_KERNEL
+          ./scripts/config --disable MODULES
+          make ARCH=um olddefconfig
 
       - name: Build UML kernel
         run: |
           cd linux-6.18
-          make ARCH=um andarium_opt_defconfig
-          make ARCH=um -j$(nproc) CC=clang LLVM=1 2>&1 | tee build.log
+          make ARCH=um -j$(nproc) CC=clang 2>&1 | tee build.log
           ls -lh linux
           file linux
 
@@ -98,14 +65,8 @@ jobs:
           path: linux-6.18/linux
           retention-days: 30
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: linux-6.18/build.log
-          retention-days: 30
-
   compress-system-img:
-    name: Compress system.img (erofs lz4hc)
+    name: Compress system.img (erofs lz4)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     if: ${{ inputs.compress_system_img }}
@@ -127,9 +88,9 @@ jobs:
           stat -c%s system.img
           test "$(stat -c%s system.img)" = "1056526336" && echo "SIZE OK" || echo "SIZE MISMATCH"
 
-      - name: Compress system.img partitions
+      - name: Compress system.img partitions (lz4)
         run: |
-          python3 scripts/compress_system_img.py system.img system.img.compressed
+          python3 scripts/compress_system_img.py system.img system.img.compressed lz4
           sgdisk -p system.img.compressed
 
       - uses: actions/upload-artifact@v4
@@ -142,18 +103,13 @@ jobs:
     name: Repack Andarium IPA
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
-    needs: [build-kernel, compress-system-img]
+    needs: [compress-system-img]
     if: ${{ inputs.build_ipa }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y python3
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: uml-kernel-optimized
-          path: kernel-out
 
       - uses: actions/download-artifact@v4
         with:
@@ -171,12 +127,13 @@ jobs:
           ls -lh Andarium-1.0-15.ipa
           unzip -l Andarium-1.0-15.ipa | tail -3
 
-      - name: Repack IPA
+      - name: Repack IPA with compressed system.img
         run: |
-          python3 scripts/repack_ipa.py Andarium-1.0-15.ipa Andarium-optimized.ipa kernel-command-line-optimized.txt img-out/system.img.compressed
+          python3 scripts/repack_ipa.py Andarium-1.0-15.ipa Andarium-optimized-lz4.ipa \
+            kernel-command-line-optimized.txt img-out/system.img.compressed
 
       - uses: actions/upload-artifact@v4
         with:
           name: andarium-optimized-ipa
-          path: Andarium-optimized.ipa
+          path: Andarium-optimized-lz4.ipa
           retention-days: 30
