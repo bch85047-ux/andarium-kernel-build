@@ -35,9 +35,7 @@ jobs:
           make -j$(nproc)
           sudo make install
           sudo ldconfig
-          find /usr/local -name 'erofsfuse' -o -name 'fsck.erofs' -o -name 'mkfs.erofs' 2>/dev/null
-          curl -sL -o partition-layout.json "https://raw.githubusercontent.com/bch85047-ux/andarium-kernel-build/main/partition-layout.json"
-          head -c 80 partition-layout.json; echo
+          find /usr/local -name 'erofsfuse' 2>/dev/null
           exit 0
 
       - name: Download original system.img
@@ -49,6 +47,8 @@ jobs:
           done
           cat chunks/system.img.* > system.img
           stat -c%s system.img
+          curl -sL -o partition-layout.json "https://raw.githubusercontent.com/bch85047-ux/andarium-kernel-build/main/partition-layout.json"
+          ls -la partition-layout.json
 
       - name: Step split
         run: |
