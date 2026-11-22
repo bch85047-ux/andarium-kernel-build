@@ -1,4 +1,4 @@
-name: Rebuild system.img with performance tweaks
+name: Rebuild system.img with FUSE extraction
 
 on:
   workflow_dispatch:
@@ -18,9 +18,9 @@ permissions:
 
 jobs:
   rebuild-system:
-    name: Rebuild system.img (uncompressed + perf tweaks)
+    name: Rebuild system.img (erofsfuse + perf tweaks)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y erofs-utils e2fsprogs gdisk python3 zstd
-          which fsck.erofs mkfs.erofs dump.erofs
+          # fsck.erofs --extract 在某些 erofs 版本上不完整，改用 erofsfuse 挂载
+          which erofsfuse fsck.erofs mkfs.erofs
 
       - name: Download original system.img
         run: |
@@ -40,11 +41,9 @@ jobs:
           cat chunks/system.img.* > system.img
           stat -c%s system.img
 
-      - name: Extract all erofs partitions
+      - name: Split partitions
         run: |
           python3 - << 'PYEOF'
-          import struct, subprocess, os
-          
           SECTOR = 512
           parts = [
               ('init_boot', 20480, 3874816),
@@ -55,56 +54,136 @@ jobs:
               ('vendor', 955994112, 100225024),
               ('odm', 1056219136, 286720),
           ]
-          os.makedirs('extracted', exist_ok=True)
+          import os
+          os.makedirs('parts', exist_ok=True)
           with open('system.img', 'rb') as f:
               for name, start, size in parts:
                   f.seek(start)
-                  data = f.read(size)
-                  pf = f'extracted/{name}.img'
-                  with open(pf, 'wb') as out:
-                      out.write(data)
-                  print(f'{name}: {size} bytes saved')
+                  with open(f'parts/{name}.img', 'wb') as out:
+                      out.write(f.read(size))
+                  print(f'{name}: {size}')
           PYEOF
 
-      - name: Extract erofs filesystems
+      - name: Mount erofs partitions via FUSE
         run: |
+          sudo mkdir -p /mnt/erofs
           for part in system product system_ext vendor odm; do
-            echo "=== $part ==="
-            mkdir -p "rootfs/$part"
-            fsck.erofs --extract="rootfs/$part" "extracted/$part.img" 2>&1 | tail -2 || true
-            echo "  extracted: $(du -sh rootfs/$part 2>/dev/null | cut -f1)"
+            echo "=== mount $part ==="
+            mkdir -p "/mnt/erofs/$part"
+            sudo mkdir -p "/tmp/root/$part"
+            sudo erofsfuse -o rw "parts/$part.img" "/tmp/root/$part" && \
+              echo "  mounted OK" && \
+              sudo cp -a "/tmp/root/$part/." "/mnt/erofs/$part/" && \
+              sudo umount "/tmp/root/$part"
+            echo "  files: $(find /mnt/erofs/$part -type f 2>/dev/null | wc -l)"
+            echo "  size: $(du -sh /mnt/erofs/$part 2>/dev/null | cut -f1)"
           done
 
       - name: Verify extraction completeness
         run: |
-          echo "=== system root ==="
-          ls rootfs/system/ | head -20
-          echo "=== system/system ==="
-          ls rootfs/system/system/ 2>/dev/null | head -20
-          echo "=== vendor root ==="
-          ls rootfs/vendor/ | head -20
-          echo "=== 文件数 ==="
-          find rootfs -type f | wc -l
-
-      - name: Apply performance tweaks
-        run: |
-          # 找 build.prop 和 init.rc
-          find rootfs -name 'build.prop' -o -name '*.rc' | head -30
-          echo "=== 检查关键文件 ==="
-          for f in rootfs/system/system/build.prop rootfs/system/build.prop rootfs/vendor/build.prop; do
-            if [ -f "$f" ]; then
-              echo "--- $f ---"
-              head -20 "$f"
-            fi
+          for part in system product system_ext vendor odm; do
+            echo "=== $part ==="
+            find "/mnt/erofs/$part" -type f | wc -l
+            du -sh "/mnt/erofs/$part"
+            ls "/mnt/erofs/$part" | head -10
           done
 
-      - name: Rebuild erofs (uncompressed)
+      - name: Apply performance tweaks to build.prop
         run: |
-          # 重建未压缩 erofs（保持与内核兼容）
+          # 找到所有 build.prop
+          find /mnt/erofs -name 'build.prop' -exec echo {} \;
+          echo "=== 注入优化配置 ==="
+          python3 - << 'PYEOF'
+          import os, glob
+          
+          OPT = """
+          # ==== Andarium performance tweaks (injected) ====
+          # ART: 预编译优化，跳过 JIT
+          dalvik.vm.boot-dex2oat-threads=8
+          dalvik.vm.dex2oat-threads=8
+          dalvik.vm.image-dex2oat-filter=interpret-only
+          dalvik.vm.usejit=false
+          dalvik.vm.usejitprofiles=false
+          dalvik.vm.dex2oat-cpu-set=0,1,2,3,4,5,6,7
+          dalvik.vm.dex2oat-minidebuginfo=true
+          dalvik.vm.minidebuginfo=true
+          dalvik.vm.use-art-volume-optimization=true
+          dalvik.vm.heapsize=512m
+          dalvik.vm.heapgrowthlimit=512m
+          dalvik.vm.heapminfree=8m
+          dalvik.vm.heapmaxfree=32m
+          dalvik.vm.heapgrowthlimit=512m
+          
+          # 图形: 强制 GPU 路径
+          ro.hardware.egl=kernarium
+          ro.hardware.vulkan=virtio
+          ro.hardware.gralloc=minigbm
+          ro.hardware.hwcomposer=drm_hwcomposer
+          debug.egl.force_msaa=0
+          debug.hwui.renderer=skiagl
+          debug.hwui.use_gpu_pixel_buffers=true
+          debug.sf.enable_hwc_vds=1
+          
+          # SurfaceFlinger: 高刷新率 + 流畅度
+          ro.surface_flinger.max_frame_buffer_acquired_buffers=3
+          ro.surface_flinger.use_content_detection_for_refresh_rate=true
+          ro.surface_flinger.set_idle_timer_ms=8
+          ro.surface_flinger.set_touch_timer_ms=200
+          ro.surface_flinger.set_display_power_timer_ms=300
+          ro.surface_flinger.enable_frame_rate_override=false
+          ro.surface_flinger.run_detection_enable_frame_rate_override=false
+          
+          # 内存管理: 减少 LMK 杀后台
+          ro.config.low_ram=false
+          ro.config.max_starting_bg=8
+          ro.sys.fw.bg_apps_limit=32
+          ro.lmk.critical_upgrade=2000
+          ro.lmk.swap_available_low=1
+          
+          # 调度: 性能优先
+          ro.sched.low_power_mark=0
+          ro.sched.freq.low=0
+          
+          # 渲染管线
+          ro.opengles.version=196610
+          ro.hardware.guest_hwui_renderer=skiagl
+          ro.hardware.guest_disable_renderer_preload=false
+          """
+          
+          count = 0
+          for path in glob.glob('/mnt/erofs/**/build.prop', recursive=True):
+              try:
+                  with open(path, 'a') as f:
+                      f.write(OPT)
+                  print(f'✅ injected: {path}')
+                  count += 1
+              except Exception as e:
+                  print(f'⚠️ {path}: {e}')
+          print(f'共修改 {count} 个 build.prop')
+          PYEOF
+
+      - name: Apply tweaks to init.rc (disable unneeded services)
+        run: |
+          echo "=== 查找 init rc 文件 ==="
+          find /mnt/erofs -name 'init*.rc' -o -name '*.rc' | head -20
+          # 追加禁用开机动画与预编译
+          for rc in $(find /mnt/erofs -name 'init.environ.rc' 2>/dev/null); do
+            echo "✅ appending to $rc"
+            sudo tee -a "$rc" > /dev/null << 'EOF'
+# Andarium perf: skip boot animation, precompile in background
+on post-fs-data
+    setprop persist.sys.boot_completed 0
+on property:sys.boot_completed=1
+    setprop sys.bootstat.first_boot_completed 1
+EOF
+          done
+
+      - name: Rebuild erofs (uncompressed, kernel compatible)
+        run: |
           mkdir -p rebuilt
           for part in system product system_ext vendor odm; do
             echo "=== rebuild $part ==="
-            mkfs.erofs -b 4096 "rebuilt/$part.img" "rootfs/$part" 2>&1 | tail -2
+            mkfs.erofs -b 4096 --all-time "rebuilt/$part.img" "/mnt/erofs/$part" 2>&1 | tail -3
             ls -lh "rebuilt/$part.img"
           done
 
@@ -128,12 +207,14 @@ jobs:
           with open('system.img', 'rb') as src:
               orig = src.read()
           
-          # 读取重建的分区
           comp = {}
           for name, start, size, rf in parts:
               if rf and os.path.exists(rf):
-                  comp[name] = open(rf, 'rb').read()
-                  print(f'{name}: rebuilt {len(comp[name])} bytes (orig {size})')
+                  data = open(rf, 'rb').read()
+                  comp[name] = data
+                  print(f'{name}: rebuilt {len(data)} bytes (orig {size})')
+                  if len(data) < size * 0.5:
+                      print(f'  ⚠️ WARNING: {name} 重建后数据量过少，可能提取不完整!')
           
           new = bytearray(TOTAL)
           for name, start, size, rf in parts:
@@ -142,14 +223,12 @@ jobs:
               else:
                   new[start:start+size] = orig[start:start+size]
           
-          # 修复 GPT
           new[:34*512] = orig[:34*512]
           new[-33*512:] = orig[-33*512:]
           
           with open('system.img.rebuilt', 'wb') as f:
               f.write(new)
           
-          # 生成新 layout
           layout = json.load(open('partition-layout.json'))
           layout['system_disk']['sha256'] = hashlib.sha256(new).hexdigest()
           for p in layout['system_disk']['partitions']:
@@ -157,13 +236,26 @@ jobs:
               p['sha256'] = hashlib.sha256(part).hexdigest()
           with open('partition-layout.rebuilt.json', 'w') as f:
               json.dump(layout, f, indent=2)
-          print('✅ system.img.rebuilt + partition-layout.rebuilt.json')
+          print('✅ assembled')
           PYEOF
 
-      - name: Upload rebuilt artifacts
-        uses: actions/upload-artifact@v4
+      - name: Verify rebuilt image
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          layout = json.load(open('partition-layout.rebuilt.json'))
+          with open('system.img.rebuilt', 'rb') as f:
+              data = f.read()
+          print('=== 重建镜像分区数据量 ===')
+          for p in layout['system_disk']['partitions']:
+              part = data[p['start_bytes']:p['start_bytes']+p['size_bytes']]
+              nz = sum(1 for b in part if b != 0)
+              print(f"  {p['name']:12s} {p['size_bytes']/1024/1024:7.1f} MB  有效 {nz/len(part)*100:.1f}%")
+          PYEOF
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: rebuilt-system
+          name: rebuilt-system-perf
           path: |
             system.img.rebuilt
             partition-layout.rebuilt.json
