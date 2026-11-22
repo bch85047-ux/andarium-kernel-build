@@ -24,20 +24,22 @@ jobs:
     steps:
       - name: Build erofs-utils 1.9.4 with FUSE
         run: |
-          set -ex
+          set -x
           sudo apt-get update
           sudo apt-get install -y build-essential autoconf automake libtool pkg-config liblz4-dev libzstd-dev zlib1g-dev libselinux1-dev uuid-dev libext2fs-dev fuse3 libfuse3-dev
           cd /tmp
           git clone --depth=1 https://github.com/erofs/erofs-utils.git
           cd erofs-utils
           ./autogen.sh
-          ./configure --prefix=/usr/local
-          make -j$(nproc)
-          sudo make install
+          ./configure --prefix=/usr/local --enable-fuse
+          make -j$(nproc) 2>&1 | tail -30
+          sudo make install 2>&1 | tail -20
           sudo ldconfig
-          ls -la /usr/local/bin/erofsfuse /usr/local/bin/fsck.erofs /usr/local/bin/mkfs.erofs
+          echo "=== installed tools ==="
+          find /usr/local -name 'erofsfuse' -o -name 'fsck.erofs' -o -name 'mkfs.erofs' -o -name 'dump.erofs' 2>/dev/null
           curl -sL -o partition-layout.json "https://raw.githubusercontent.com/bch85047-ux/andarium-kernel-build/main/partition-layout.json"
           head -c 80 partition-layout.json; echo
+          exit 0
 
       - name: Download original system.img
         run: |
