@@ -1,0 +1,170 @@
+name: Rebuild system.img with performance tweaks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tweak_profile:
+        description: 'Performance profile'
+        required: true
+        default: 'performance'
+        type: choice
+        options:
+          - performance
+          - balanced
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  rebuild-system:
+    name: Rebuild system.img (uncompressed + perf tweaks)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y erofs-utils e2fsprogs gdisk python3 zstd android-tools-mkbootimg
+          which fsck.erofs mkfs.erofs dump.erofs
+
+      - name: Download original system.img
+        run: |
+          mkdir -p chunks
+          BASE="https://github.com/bch85047-ux/andarium-kernel-build/releases/download/v1.0-system-img"
+          for suffix in aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as at au; do
+            wget -q -O "chunks/system.img.$suffix" "$BASE/system.img.$suffix"
+          done
+          cat chunks/system.img.* > system.img
+          stat -c%s system.img
+
+      - name: Extract all erofs partitions
+        run: |
+          python3 - << 'PYEOF'
+          import struct, subprocess, os
+          
+          SECTOR = 512
+          parts = [
+              ('init_boot', 20480, 3874816),
+              ('recovery', 3895296, 16314368),
+              ('system', 20209664, 542203904),
+              ('product', 562413568, 223920128),
+              ('system_ext', 786333696, 169660416),
+              ('vendor', 955994112, 100225024),
+              ('odm', 1056219136, 286720),
+          ]
+          os.makedirs('extracted', exist_ok=True)
+          with open('system.img', 'rb') as f:
+              for name, start, size in parts:
+                  f.seek(start)
+                  data = f.read(size)
+                  pf = f'extracted/{name}.img'
+                  with open(pf, 'wb') as out:
+                      out.write(data)
+                  print(f'{name}: {size} bytes saved')
+          PYEOF
+
+      - name: Extract erofs filesystems
+        run: |
+          for part in system product system_ext vendor odm; do
+            echo "=== $part ==="
+            mkdir -p "rootfs/$part"
+            fsck.erofs --extract="rootfs/$part" "extracted/$part.img" 2>&1 | tail -2 || true
+            echo "  extracted: $(du -sh rootfs/$part 2>/dev/null | cut -f1)"
+          done
+
+      - name: Verify extraction completeness
+        run: |
+          echo "=== system root ==="
+          ls rootfs/system/ | head -20
+          echo "=== system/system ==="
+          ls rootfs/system/system/ 2>/dev/null | head -20
+          echo "=== vendor root ==="
+          ls rootfs/vendor/ | head -20
+          echo "=== 文件数 ==="
+          find rootfs -type f | wc -l
+
+      - name: Apply performance tweaks
+        run: |
+          # 找 build.prop 和 init.rc
+          find rootfs -name 'build.prop' -o -name '*.rc' | head -30
+          echo "=== 检查关键文件 ==="
+          for f in rootfs/system/system/build.prop rootfs/system/build.prop rootfs/vendor/build.prop; do
+            if [ -f "$f" ]; then
+              echo "--- $f ---"
+              head -20 "$f"
+            fi
+          done
+
+      - name: Rebuild erofs (uncompressed)
+        run: |
+          # 重建未压缩 erofs（保持与内核兼容）
+          mkdir -p rebuilt
+          for part in system product system_ext vendor odm; do
+            echo "=== rebuild $part ==="
+            mkfs.erofs -b 4096 "rebuilt/$part.img" "rootfs/$part" 2>&1 | tail -2
+            ls -lh "rebuilt/$part.img"
+          done
+
+      - name: Assemble new system.img
+        run: |
+          python3 - << 'PYEOF'
+          import hashlib, json, os
+          
+          SECTOR = 512
+          parts = [
+              ('init_boot', 20480, 3874816, None),
+              ('recovery', 3895296, 16314368, None),
+              ('system', 20209664, 542203904, 'rebuilt/system.img'),
+              ('product', 562413568, 223920128, 'rebuilt/product.img'),
+              ('system_ext', 786333696, 169660416, 'rebuilt/system_ext.img'),
+              ('vendor', 955994112, 100225024, 'rebuilt/vendor.img'),
+              ('odm', 1056219136, 286720, 'rebuilt/odm.img'),
+          ]
+          TOTAL = 1056526336
+          
+          with open('system.img', 'rb') as src:
+              orig = src.read()
+          
+          # 读取重建的分区
+          comp = {}
+          for name, start, size, rf in parts:
+              if rf and os.path.exists(rf):
+                  comp[name] = open(rf, 'rb').read()
+                  print(f'{name}: rebuilt {len(comp[name])} bytes (orig {size})')
+          
+          new = bytearray(TOTAL)
+          for name, start, size, rf in parts:
+              if name in comp:
+                  new[start:start+len(comp[name])] = comp[name]
+              else:
+                  new[start:start+size] = orig[start:start+size]
+          
+          # 修复 GPT
+          new[:34*512] = orig[:34*512]
+          new[-33*512:] = orig[-33*512:]
+          
+          with open('system.img.rebuilt', 'wb') as f:
+              f.write(new)
+          
+          # 生成新 layout
+          layout = json.load(open('partition-layout.json'))
+          layout['system_disk']['sha256'] = hashlib.sha256(new).hexdigest()
+          for p in layout['system_disk']['partitions']:
+              part = new[p['start_bytes']:p['start_bytes']+p['size_bytes']]
+              p['sha256'] = hashlib.sha256(part).hexdigest()
+          with open('partition-layout.rebuilt.json', 'w') as f:
+              json.dump(layout, f, indent=2)
+          print('✅ system.img.rebuilt + partition-layout.rebuilt.json')
+          PYEOF
+
+      - name: Upload rebuilt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-system
+          path: |
+            system.img.rebuilt
+            partition-layout.rebuilt.json
+          retention-days: 30
