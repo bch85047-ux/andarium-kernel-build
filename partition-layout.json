@@ -1,0 +1,111 @@
+{
+  "schema_version": 2,
+  "sector_size": 512,
+  "system_disk": {
+    "size_bytes": 1056526336,
+    "sha256": "cb4bf3d5425240e357290fed0978524605f9e0ce4f256c304479d6671f785ba1",
+    "alignment_bytes": 4096,
+    "partition_entry_count": 128,
+    "disk_guid": "358779df-968e-55bb-b626-1c9aea73298d",
+    "partitions": [
+      {
+        "name": "init_boot",
+        "start_bytes": 20480,
+        "size_bytes": 3874816,
+        "image_bytes": 3874816,
+        "sha256": "1c9adf89b3e8eb8256643a6a2cd17750d4f17358bd581b8ecac5ec82483c9109",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "5c438c71-20cd-5a5a-b057-f473040f149c"
+      },
+      {
+        "name": "recovery",
+        "start_bytes": 3895296,
+        "size_bytes": 16314368,
+        "image_bytes": 16314368,
+        "sha256": "19827e72ba801221e5b3ec46f4612cfcc76fdbc2cd9f4263896588e75fbb6418",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "63b8ab73-87d1-5eb2-9fee-e1c4fd574d36"
+      },
+      {
+        "name": "system",
+        "start_bytes": 20209664,
+        "size_bytes": 542203904,
+        "image_bytes": 542203904,
+        "sha256": "2c8c1447d71e0f456a2fddd8bced295a830bf2acb03d878b9f2f411ccb50b0da",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "478179da-858a-572c-8130-e31643d17cd4"
+      },
+      {
+        "name": "product",
+        "start_bytes": 562413568,
+        "size_bytes": 223920128,
+        "image_bytes": 223920128,
+        "sha256": "fe5a329370e8a6b70b3a39cd49ac2e2e1674b9d0991f7584436810d8d979cf98",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "416cfbab-b208-5698-9d2b-b0535744aec3"
+      },
+      {
+        "name": "system_ext",
+        "start_bytes": 786333696,
+        "size_bytes": 169660416,
+        "image_bytes": 169660416,
+        "sha256": "ec1e04739b0e19f521c25510fedd46ab134c9d29428fa83903dd458facf78cc1",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "b93c230a-1394-583f-8020-5bf49ba043cf"
+      },
+      {
+        "name": "vendor",
+        "start_bytes": 955994112,
+        "size_bytes": 100225024,
+        "image_bytes": 100225024,
+        "sha256": "f1223020ffef1afef3559603bd519923acc675d645aa25e6e548f2026e2e660e",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "70990669-bfb4-5ee7-b8b0-eb9a46e27953"
+      },
+      {
+        "name": "odm",
+        "start_bytes": 1056219136,
+        "size_bytes": 286720,
+        "image_bytes": 286720,
+        "sha256": "f677f923b7104c93f4ac141f075e721aecd34bcbc93f909f9227f5a0af17ddf4",
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "03ae4fa4-e900-55e8-9e6c-0f333b805171"
+      }
+    ]
+  },
+  "data_disk": {
+    "layout_version": 1,
+    "alignment_bytes": 1048576,
+    "partition_entry_count": 128,
+    "disk_guid": "6917c8fc-d2af-5438-8fec-68f845a8d595",
+    "trailing_free_bytes": 1048576,
+    "capacity_gib": {
+      "minimum": 4,
+      "default": 8,
+      "maximum": 128
+    },
+    "partitions": [
+      {
+        "name": "misc",
+        "start_bytes": 1048576,
+        "size_bytes": 1048576,
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "0c75e9c7-83e5-5561-b210-8392111fdb97"
+      },
+      {
+        "name": "metadata",
+        "start_bytes": 2097152,
+        "size_bytes": 16777216,
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "936c6b70-34c2-5de7-94cf-ea7180856311"
+      },
+      {
+        "name": "userdata",
+        "start_bytes": 67108864,
+        "size_bytes": null,
+        "type_guid": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+        "unique_guid": "523abb36-1f98-5d08-92d0-31c3c8a47304"
+      }
+    ]
+  }
+}
